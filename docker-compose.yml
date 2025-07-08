@@ -1,0 +1,52 @@
+# TODO: Manage resources to each service
+services:
+  api-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:9999"
+    networks:
+      - backend
+    environment:
+      - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
+      - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+  api-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:9999"
+    networks:
+      - backend
+    environment:
+      - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
+      - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle
+    command: "start /data/0_0.tigerbeetle"
+    volumes:
+      - ./data:/data
+    security_opt:
+      - "seccomp=unconfined"
+    networks:
+      - backend
+
+  load_balancer:
+    image: nginx:latest
+    ports:
+      - "9999:80"
+    depends_on:
+      - api-1
+      - api-2
+    networks:
+      - backend
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
+networks:
+  backend:
+    driver: bridge
+  payment-processor:
+    external: true
