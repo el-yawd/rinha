@@ -23,16 +23,6 @@ services:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
 
-  tigerbeetle:
-    image: ghcr.io/tigerbeetle/tigerbeetle
-    command: "start /data/0_0.tigerbeetle"
-    volumes:
-      - ./data:/data
-    security_opt:
-      - "seccomp=unconfined"
-    networks:
-      - backend
-
   load_balancer:
     image: nginx:latest
     ports:
