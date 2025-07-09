@@ -74,11 +74,9 @@ async fn exec_payment(
     State(tx): State<mpsc::Sender<PaymentMessage>>,
     Json(payload): Json<Payment>,
 ) -> impl IntoResponse {
-    let now = chrono::Utc::now().to_rfc3339();
-
     let msg = PaymentMessage {
         payment: payload,
-        timestamp: now,
+        timestamp: chrono::Utc::now().to_rfc3339(),
     };
 
     if let Err(e) = tx.send(msg).await {
@@ -97,10 +95,7 @@ pub async fn spawn_worker(
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let correlation_id = msg.payment.correlation_id;
-            if let Err(e) = handler
-                .process_payment(msg.payment, msg.timestamp.clone())
-                .await
-            {
+            if let Err(e) = handler.process_payment(msg.payment).await {
                 eprintln!("[worker {id}] Failed to process payment: {e}");
             } else {
                 tracing::debug!("[worker {id}] Processed payment {}", correlation_id);

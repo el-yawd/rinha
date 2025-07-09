@@ -1,5 +1,5 @@
 use ::serde::Deserialize;
-use axum::http::HeaderMap;
+use axum::{Json, http::HeaderMap};
 use reqwest::Client;
 
 use crate::types::Payment;
@@ -18,6 +18,7 @@ impl ProviderHandler {
     pub async fn new() -> anyhow::Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert("X-Rinha-Token", "123".parse().unwrap());
+        headers.insert("Content-Type", "application/json".parse().unwrap());
         // TODO: Tweak Client config
         let client = Client::builder().default_headers(headers.clone()).build()?;
 
@@ -44,7 +45,14 @@ impl ProviderHandler {
         })
     }
 
-    pub async fn process_payment(&self, payment: Payment, timestamp: String) -> anyhow::Result<()> {
+    pub async fn process_payment(&self, payment: Payment) -> anyhow::Result<()> {
+        self.client
+            .post(URLS.get("default_payments").unwrap())
+            .body(serde_json::to_string(&payment)?)
+            .send()
+            .await?
+            .error_for_status()?;
+
         Ok(())
     }
 }
