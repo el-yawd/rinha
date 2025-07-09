@@ -28,15 +28,16 @@ pub static URLS: LazyLock<HashMap<&'static str, String>> = LazyLock::new(|| {
     ])
 });
 
+#[derive(Clone)]
 pub enum CurrentProvider {
     Default,
     Fallback,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Fee(pub f64);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Provider {
     pub fee: Fee,
 }

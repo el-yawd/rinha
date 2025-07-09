@@ -2,8 +2,11 @@ use ::serde::Deserialize;
 use axum::http::HeaderMap;
 use reqwest::Client;
 
+use crate::types::Payment;
+
 use super::provider::{CurrentProvider, Fee, Provider, URLS};
 
+#[derive(Clone)]
 pub struct ProviderHandler {
     pub client: Client,
     pub current_provider: CurrentProvider,
@@ -39,6 +42,10 @@ impl ProviderHandler {
             fallback_provider: Provider::new(Fee(fallback_res.fee_per_transaction)),
             default_provider: Provider::new(Fee(default_res.fee_per_transaction)),
         })
+    }
+
+    pub async fn process_payment(&self, payment: Payment, timestamp: String) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use axum::extract::State;
 use axum::{
     Json, Router,
     extract::Query,
@@ -8,31 +9,51 @@ use axum::{
     routing::{get, post},
 };
 use provider::handler::ProviderHandler;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use tokio::sync::mpsc;
+use types::{Payment, PaymentMessage};
 
 mod provider;
+mod types;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+    const NUM_WORKERS: usize = 4;
 
-    match ProviderHandler::new().await {
-        Ok(handler) => {
-            println!(
-                "Default Fee: {:?}\n, Fallback Fee: {:?}",
-                handler.default_provider.fee, handler.fallback_provider.fee
-            );
-        }
+    let (main_tx, mut main_rx) = mpsc::channel::<PaymentMessage>(1000);
+
+    // Initialize one handler per worker
+    let handler = match ProviderHandler::new().await {
+        Ok(h) => h,
         Err(e) => {
-            eprintln!("Error initializing provider handler: {}", e);
+            return Err(e);
         }
+    };
+
+    let mut worker_txs = Vec::with_capacity(NUM_WORKERS);
+
+    for i in 0..NUM_WORKERS {
+        let (tx, rx) = mpsc::channel(100);
+        spawn_worker(rx, handler.clone(), i).await;
+        worker_txs.push(tx);
     }
 
+    tokio::spawn(async move {
+        let mut i = 0;
+        while let Some(msg) = main_rx.recv().await {
+            let tx = &worker_txs[i % NUM_WORKERS];
+            if tx.send(msg).await.is_err() {
+                eprintln!("worker {i} died");
+            }
+            i += 1;
+        }
+    });
+
+    // HTTP router
     let app = Router::new()
         .route("/payments-summary", get(get_payments_summary))
-        .route("/payments", post(exec_payment));
-
+        .route("/payments", post(exec_payment))
+        .with_state(main_tx.clone());
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
     axum::serve(listener, app).await?;
 
@@ -49,31 +70,43 @@ async fn get_payments_summary(Query(params): Query<HashMap<String, String>>) -> 
     StatusCode::OK
 }
 
-async fn exec_payment(Json(payload): Json<Payment>) -> impl IntoResponse {
-    // 2. Send to PP default (handle faults), or to fallback
-    // Create a custom logic to decide which payment processor should be used.
-    // 3. Finalize the pending transfer
+async fn exec_payment(
+    State(tx): State<mpsc::Sender<PaymentMessage>>,
+    Json(payload): Json<Payment>,
+) -> impl IntoResponse {
+    let now = chrono::Utc::now().to_rfc3339();
 
-    StatusCode::OK
+    let msg = PaymentMessage {
+        payment: payload,
+        timestamp: now,
+    };
+
+    if let Err(e) = tx.send(msg).await {
+        eprintln!("Failed to enqueue payment: {}", e);
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    StatusCode::ACCEPTED
 }
 
-#[derive(Deserialize, Serialize)]
-struct Payment {
-    #[serde(rename = "correlationId")]
-    correlation_id: Uuid,
-    amount: u64,
-}
+pub async fn spawn_worker(
+    mut rx: mpsc::Receiver<PaymentMessage>,
+    handler: ProviderHandler,
+    id: usize,
+) {
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            let correlation_id = msg.payment.correlation_id;
+            if let Err(e) = handler
+                .process_payment(msg.payment, msg.timestamp.clone())
+                .await
+            {
+                eprintln!("[worker {id}] Failed to process payment: {e}");
+            } else {
+                tracing::debug!("[worker {id}] Processed payment {}", correlation_id);
+            }
+        }
 
-#[derive(Serialize)]
-struct GlobalSummary {
-    default: Summary,
-    fallback: Summary,
-}
-
-#[derive(Serialize)]
-struct Summary {
-    #[serde(rename = "totalRequests")]
-    total_requests: u64,
-    #[serde(rename = "totalAmount")]
-    total_amount: u64,
+        eprintln!("[worker {id}] Channel closed, exiting...");
+    });
 }
