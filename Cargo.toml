@@ -2,6 +2,11 @@
 name = "rinha"
 version = "0.1.0"
 edition = "2024"
+authors = ["Diego Reis"]
+license = "MIT"
+
+[workspace]
+members = ["rinha-db"]
 
 [dependencies]
 anyhow = "1.0.98"
