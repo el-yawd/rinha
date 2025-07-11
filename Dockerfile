@@ -1,8 +1,18 @@
-FROM rust:1.87-slim as builder
+FROM rust:1.88-alpine as builder
 WORKDIR /usr/src/app
+RUN apk add --no-cache \
+    musl-dev \
+    openssl-dev \
+    openssl-libs-static \
+    pkgconfig
 COPY . .
-RUN cargo build --release
 
-FROM debian:buster-slim
-COPY --from=builder /usr/src/app/target/release/rinha /usr/local/bin/rinha
+ENV RUSTFLAGS="-C target-feature=+crt-static"
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+# Use scratch or minimal base
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
+RUN mkdir -p /data && chmod 755 /data
+COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-musl/release/rinha /usr/local/bin/rinha
 CMD ["rinha"]

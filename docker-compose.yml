@@ -5,27 +5,34 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:9999"
+      - ":9999"
     networks:
       - backend
+      - payment-processor
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+      - API_ID=1
+      - DATABASE_URL=sqlite:///data/app.db
     volumes:
-      - .:/app
+      - shared_db:/data
+
   api-2:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3001:9999"
+      - ":9999"
     networks:
       - backend
+      - payment-processor
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+      - API_ID=2
+      - DATABASE_URL=sqlite:///data/app.db
     volumes:
-      - .:/app
+      - shared_db:/data
 
   load_balancer:
     image: nginx:latest
@@ -44,3 +51,7 @@ networks:
     driver: bridge
   payment-processor:
     external: true
+
+volumes:
+  shared_db:
+    driver: local

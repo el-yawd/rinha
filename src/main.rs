@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 
 use axum::extract::State;
 use axum::{
@@ -92,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn spawn_db_task(mut rx: mpsc::Receiver<DbOperation>) -> anyhow::Result<()> {
-    let db = Connection::open("payments.db")?;
+    let db = Connection::open(env::var("DATABASE_URL").unwrap_or("payment.db".to_string()))?;
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS payments (
             correlation_id TEXT PRIMARY KEY,
@@ -150,6 +151,8 @@ async fn get_payments_summary(
     Query(params): Query<HashMap<String, String>>,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
+    let api_id = env::var("API_ID").unwrap_or_default();
+    println!("getting payments summary:{}", api_id);
     let from = params
         .get("from")
         .map(String::as_str)
