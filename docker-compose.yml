@@ -11,6 +11,8 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+    volumes:
+      - .:/app
   api-2:
     build:
       context: .
@@ -22,6 +24,8 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+    volumes:
+      - .:/app
 
   load_balancer:
     image: nginx:latest

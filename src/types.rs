@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Payment {
     #[serde(rename = "correlationId")]
     pub correlation_id: Uuid,
-    amount: f64,
+    pub amount: f64,
 }
 
 #[derive(Serialize)]
@@ -22,7 +22,7 @@ pub struct Summary {
     total_amount: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PaymentMessage {
     pub payment: Payment,
     pub timestamp: String,

@@ -1,6 +1,9 @@
+use std::sync::{Arc, RwLock};
+
 use ::serde::Deserialize;
 use axum::http::HeaderMap;
 use reqwest::Client;
+use rusqlite::Connection;
 
 use crate::types::Payment;
 
