@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/payments-summary", get(get_payments_summary))
         .route("/payments", post(exec_payment))
-        .route("/admin/purge-payments", post(purge_payments))
+        .route("/purge-payments", post(purge_payments))
         .layer(Extension(pool))
         .with_state(AppState { handler_sender });
 
