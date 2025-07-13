@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/payments-summary", get(get_payments_summary))
         .route("/payments", post(exec_payment))
+        .route("/admin/purge-payments", post(purge_payments))
         .layer(Extension(pool))
         .with_state(AppState { handler_sender });
 
@@ -113,6 +114,14 @@ async fn exec_payment(
     }
 
     StatusCode::OK
+}
+
+pub async fn purge_payments(Extension(pool): Extension<Pool<Sqlite>>) -> impl IntoResponse {
+    sqlx::query("DELETE FROM payments")
+        .execute(&pool)
+        .await
+        .map(|_| StatusCode::OK)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 pub async fn spawn_worker(rx: async_channel::Receiver<PaymentMessage>, handler: ProviderHandler) {
