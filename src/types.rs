@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Payment {
+pub struct PaymentDTO {
     #[serde(rename = "correlationId")]
     pub correlation_id: Uuid,
     pub amount: f64,
@@ -22,7 +22,21 @@ pub struct Summary {
     total_amount: f64,
 }
 
-#[derive(Debug, Clone)]
-pub struct PaymentMessage {
-    pub payment: Payment,
+#[derive(Serialize)]
+pub struct PaymentServiceDTO {
+    #[serde(rename = "correlationId")]
+    pub correlation_id: Uuid,
+    pub amount: f64,
+    #[serde(rename = "requestedAt")]
+    pub requested_at: String,
+}
+
+impl PaymentServiceDTO {
+    pub fn new(payment: PaymentDTO, requested_at: String) -> Self {
+        PaymentServiceDTO {
+            correlation_id: payment.correlation_id,
+            amount: payment.amount,
+            requested_at,
+        }
+    }
 }

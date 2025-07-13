@@ -11,18 +11,19 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use chrono::DateTime;
 use provider::handler::ProviderHandler;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 use sqlx::{Pool, Sqlite};
 use sqlx::{Row, SqlitePool};
-use types::{Payment, PaymentMessage};
+use types::PaymentDTO;
 
 mod provider;
 mod types;
 
 #[derive(Clone)]
 struct AppState {
-    pub handler_sender: async_channel::Sender<PaymentMessage>,
+    pub handler_sender: async_channel::Sender<PaymentDTO>,
 }
 
 #[tokio::main]
@@ -35,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize one handler per worker
     let handler = ProviderHandler::new(pool.clone()).await?;
 
-    let (handler_sender, handler_receiver) = async_channel::unbounded::<PaymentMessage>();
+    let (handler_sender, handler_receiver) = async_channel::unbounded::<PaymentDTO>();
     for _ in 0..NUM_WORKERS {
         spawn_worker(handler_receiver.clone(), handler.clone()).await;
     }
@@ -54,21 +55,26 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn parse_timestamp_to_unix(timestamp_str: &str) -> Result<i64, chrono::ParseError> {
+    let dt = DateTime::parse_from_rfc3339(timestamp_str)?;
+    Ok(dt.timestamp())
+}
+
 async fn get_payments_summary(
     Query(params): Query<HashMap<String, String>>,
     Extension(pool): Extension<Pool<Sqlite>>,
 ) -> impl IntoResponse {
     let from = params
         .get("from")
-        .map(String::as_str)
-        .unwrap_or("0000-01-01T00:00:00Z")
-        .to_string();
+        .map(|s| parse_timestamp_to_unix(s))
+        .unwrap_or(Ok(0))
+        .unwrap_or(0);
 
     let to = params
         .get("to")
-        .map(String::as_str)
-        .unwrap_or("9999-12-31T23:59:59Z")
-        .to_string();
+        .map(|s| parse_timestamp_to_unix(s))
+        .unwrap_or(Ok(i64::MAX))
+        .unwrap_or(i64::MAX);
 
     let result = sqlx::query(
         "
@@ -77,6 +83,7 @@ async fn get_payments_summary(
             COUNT(*) AS totalRequests,
             SUM(amount) AS totalAmount
         FROM payments
+        WHERE timestamp >= ? AND timestamp <= ?
         GROUP BY is_default;",
     )
     .bind(&from)
@@ -105,11 +112,9 @@ async fn get_payments_summary(
 
 async fn exec_payment(
     State(app_state): State<AppState>,
-    Json(payload): Json<Payment>,
+    Json(payload): Json<PaymentDTO>,
 ) -> impl IntoResponse {
-    let msg = PaymentMessage { payment: payload };
-
-    if let Err(_) = app_state.handler_sender.send(msg).await {
+    if let Err(_) = app_state.handler_sender.send(payload).await {
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
@@ -124,10 +129,10 @@ pub async fn purge_payments(Extension(pool): Extension<Pool<Sqlite>>) -> impl In
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-pub async fn spawn_worker(rx: async_channel::Receiver<PaymentMessage>, handler: ProviderHandler) {
+pub async fn spawn_worker(rx: async_channel::Receiver<PaymentDTO>, handler: ProviderHandler) {
     tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
-            if let Err(err) = handler.process_payment(msg.payment).await {
+            if let Err(err) = handler.process_payment(msg).await {
                 eprintln!("{}", err);
             }
         }
@@ -148,7 +153,7 @@ pub async fn connect_db() -> anyhow::Result<Pool<Sqlite>> {
                 correlation_id TEXT PRIMARY KEY,
                 is_default INT,
                 amount REAL NOT NULL,
-                timestamp TEXT NOT NULL
+                timestamp INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_payments_timestamp
             ON payments (timestamp);

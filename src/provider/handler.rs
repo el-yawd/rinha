@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use ::serde::Deserialize;
 use axum::http::HeaderMap;
+use chrono::Utc;
 use reqwest::Client;
 use sqlx::{Pool, Sqlite};
 use tokio::sync::RwLock;
 
-use crate::types::Payment;
+use crate::types::{PaymentDTO, PaymentServiceDTO};
 
 use super::provider::{CurrentProvider, Fee, Provider, URLS};
 
@@ -18,7 +19,7 @@ pub struct ProviderHandler {
     pub default_provider: Arc<RwLock<Provider>>,
     pub pool: Pool<Sqlite>,
 
-    payments: Vec<Payment>,
+    payments: Vec<PaymentDTO>,
 }
 
 impl ProviderHandler {
@@ -27,7 +28,11 @@ impl ProviderHandler {
         headers.insert("X-Rinha-Token", "123".parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
         // TODO: Tweak Client config
-        let client = Client::builder().default_headers(headers.clone()).build()?;
+        let client = Client::builder()
+            .no_gzip()
+            .no_zstd()
+            .default_headers(headers.clone())
+            .build()?;
 
         let (default_sum, fallback_sum, default_health, fallback_health) = tokio::try_join!(
             async {
@@ -85,21 +90,23 @@ impl ProviderHandler {
 
     /// Process a payment using a naive strategy. If default provider is down try fallback, if both fails drop the payment.
     // TODO: Explore different strategies for handling payment processing failures.
-    pub async fn process_payment(&self, payment: Payment) -> anyhow::Result<()> {
+    pub async fn process_payment(&self, payload: PaymentDTO) -> anyhow::Result<()> {
+        let now_local = Utc::now().timestamp();
+        let payload = PaymentServiceDTO::new(payload, Utc::now().to_rfc3339());
         match self
             .client
             .post(URLS.get("default_payments").unwrap())
-            .body(serde_json::to_string(&payment)?)
+            .body(serde_json::to_string(&payload)?)
             .send()
             .await?
             .error_for_status()
         {
             Ok(_) => {
                 sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
-            .bind(&payment.correlation_id.to_string())
-            .bind(&payment.amount)
-            .bind(true)
-            .bind(&chrono::Utc::now().to_rfc3339())
+            .bind(&payload.correlation_id.to_string())
+            .bind(&payload.amount)
+            .bind(1)
+            .bind(&now_local)
             .execute(&self.pool)
             .await?;
 
@@ -110,17 +117,17 @@ impl ProviderHandler {
                 let res = self
                     .client
                     .post(URLS.get("fallback_payments").unwrap())
-                    .body(serde_json::to_string(&payment)?)
+                    .body(serde_json::to_string(&payload)?)
                     .send()
                     .await?
                     .error_for_status();
 
                 if res.is_ok() {
                     sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
-                            .bind(&payment.correlation_id.to_string())
-                            .bind(&payment.amount)
-                            .bind(false)
-                            .bind(&chrono::Utc::now().to_rfc3339())
+                            .bind(&payload.correlation_id.to_string())
+                            .bind(&payload.amount)
+                            .bind(0)
+                            .bind(&now_local)
                             .execute(&self.pool)
                             .await?;
                 }
