@@ -40,10 +40,16 @@ pub struct Fee(pub f64);
 #[derive(Debug, Clone)]
 pub struct Provider {
     pub fee: Fee,
+    pub is_failing: bool,
+    pub min_res_time: u64,
 }
 
 impl Provider {
-    pub fn new(fee: Fee) -> Self {
-        Provider { fee }
+    pub fn new(fee: Fee, is_failing: bool, min_res_time: u64) -> Self {
+        Provider {
+            fee,
+            is_failing,
+            min_res_time,
+        }
     }
 }

@@ -1,6 +1,10 @@
+use std::sync::Arc;
+
 use ::serde::Deserialize;
 use axum::http::HeaderMap;
 use reqwest::Client;
+use sqlx::{Pool, Sqlite};
+use tokio::sync::RwLock;
 
 use crate::types::Payment;
 
@@ -10,38 +14,72 @@ use super::provider::{CurrentProvider, Fee, Provider, URLS};
 pub struct ProviderHandler {
     pub client: Client,
     pub current_provider: CurrentProvider,
-    pub fallback_provider: Provider,
-    pub default_provider: Provider,
+    pub fallback_provider: Arc<RwLock<Provider>>,
+    pub default_provider: Arc<RwLock<Provider>>,
+    pub pool: Pool<Sqlite>,
+
+    payments: Vec<Payment>,
 }
 
 impl ProviderHandler {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(pool: Pool<Sqlite>) -> anyhow::Result<Self> {
         let mut headers = HeaderMap::new();
-        headers.insert("X-Rinha-Token", "123".parse().unwrap());
-        headers.insert("Content-Type", "application/json".parse().unwrap());
+        headers.insert("X-Rinha-Token", "123".parse()?);
+        headers.insert("Content-Type", "application/json".parse()?);
         // TODO: Tweak Client config
         let client = Client::builder().default_headers(headers.clone()).build()?;
 
-        // TODO: Make they in parallel
-        let default_res = client
-            .get(URLS.get("default_summary").unwrap())
-            .send()
-            .await?
-            .json::<PaymentSummaryResponse>()
-            .await?;
-
-        let fallback_res = client
-            .get(URLS.get("fallback_summary").unwrap())
-            .send()
-            .await?
-            .json::<PaymentSummaryResponse>()
-            .await?;
+        let (default_sum, fallback_sum, default_health, fallback_health) = tokio::try_join!(
+            async {
+                client
+                    .get(URLS.get("default_summary").unwrap())
+                    .send()
+                    .await?
+                    .json::<PaymentSummaryResponse>()
+                    .await
+            },
+            async {
+                client
+                    .get(URLS.get("fallback_summary").unwrap())
+                    .send()
+                    .await?
+                    .json::<PaymentSummaryResponse>()
+                    .await
+            },
+            async {
+                client
+                    .get(URLS.get("default_payments_health").unwrap())
+                    .send()
+                    .await?
+                    .json::<ProviderHealthResponse>()
+                    .await
+            },
+            async {
+                client
+                    .get(URLS.get("fallback_payments_health").unwrap())
+                    .send()
+                    .await?
+                    .json::<ProviderHealthResponse>()
+                    .await
+            }
+        )
+        .expect("Unable to connect with external providers, Aborting...");
 
         Ok(Self {
             client,
             current_provider: CurrentProvider::Default,
-            fallback_provider: Provider::new(Fee(fallback_res.fee_per_transaction)),
-            default_provider: Provider::new(Fee(default_res.fee_per_transaction)),
+            fallback_provider: Arc::new(RwLock::new(Provider::new(
+                Fee(fallback_sum.fee_per_transaction),
+                fallback_health.failing,
+                fallback_health.min_response_time,
+            ))),
+            default_provider: Arc::new(RwLock::new(Provider::new(
+                Fee(default_sum.fee_per_transaction),
+                default_health.failing,
+                default_health.min_response_time,
+            ))),
+            payments: Vec::with_capacity(100),
+            pool,
         })
     }
 
@@ -52,6 +90,14 @@ impl ProviderHandler {
             .send()
             .await?
             .error_for_status()?;
+
+        sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
+            .bind(&payment.correlation_id.to_string())
+            .bind(&payment.amount)
+            .bind(true)
+            .bind(&chrono::Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -67,4 +113,11 @@ struct PaymentSummaryResponse {
     total_fee: f64,
     #[serde(rename = "feePerTransaction")]
     fee_per_transaction: f64,
+}
+
+#[derive(Deserialize)]
+struct ProviderHealthResponse {
+    failing: bool,
+    #[serde(rename = "minResponseTime")]
+    min_response_time: u64,
 }

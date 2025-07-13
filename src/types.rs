@@ -25,5 +25,4 @@ pub struct Summary {
 #[derive(Debug, Clone)]
 pub struct PaymentMessage {
     pub payment: Payment,
-    pub timestamp: String,
 }
