@@ -13,7 +13,7 @@ services:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - API_ID=1
-      - DATABASE_URL=sqlite:///data/app.db
+      - DATABASE_URL=data/app.db
     volumes:
       - shared_db:/data
 
@@ -30,7 +30,7 @@ services:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - API_ID=2
-      - DATABASE_URL=sqlite:///data/app.db
+      - DATABASE_URL=data/app.db
     volumes:
       - shared_db:/data
 
