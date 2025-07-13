@@ -83,15 +83,19 @@ impl ProviderHandler {
         })
     }
 
+    /// Process a payment using a naive strategy. If default provider is down try fallback, if both fails drop the payment.
+    // TODO: Explore different strategies for handling payment processing failures.
     pub async fn process_payment(&self, payment: Payment) -> anyhow::Result<()> {
-        self.client
+        match self
+            .client
             .post(URLS.get("default_payments").unwrap())
             .body(serde_json::to_string(&payment)?)
             .send()
             .await?
-            .error_for_status()?;
-
-        sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
+            .error_for_status()
+        {
+            Ok(_) => {
+                sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
             .bind(&payment.correlation_id.to_string())
             .bind(&payment.amount)
             .bind(true)
@@ -99,7 +103,31 @@ impl ProviderHandler {
             .execute(&self.pool)
             .await?;
 
-        Ok(())
+                Ok(())
+            }
+
+            Err(_) => {
+                let res = self
+                    .client
+                    .post(URLS.get("fallback_payments").unwrap())
+                    .body(serde_json::to_string(&payment)?)
+                    .send()
+                    .await?
+                    .error_for_status();
+
+                if res.is_ok() {
+                    sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
+                            .bind(&payment.correlation_id.to_string())
+                            .bind(&payment.amount)
+                            .bind(false)
+                            .bind(&chrono::Utc::now().to_rfc3339())
+                            .execute(&self.pool)
+                            .await?;
+                }
+
+                Ok(())
+            }
+        }
     }
 }
 
