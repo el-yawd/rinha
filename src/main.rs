@@ -11,7 +11,6 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use chrono::DateTime;
 use provider::handler::ProviderHandler;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 use sqlx::{Pool, Sqlite};
@@ -55,26 +54,21 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_timestamp_to_unix(timestamp_str: &str) -> Result<i64, chrono::ParseError> {
-    let dt = DateTime::parse_from_rfc3339(timestamp_str)?;
-    Ok(dt.timestamp())
-}
-
 async fn get_payments_summary(
     Query(params): Query<HashMap<String, String>>,
     Extension(pool): Extension<Pool<Sqlite>>,
 ) -> impl IntoResponse {
     let from = params
         .get("from")
-        .map(|s| parse_timestamp_to_unix(s))
-        .unwrap_or(Ok(0))
-        .unwrap_or(0);
+        .map(String::as_str)
+        .unwrap_or("0000-01-01T00:00:00Z")
+        .to_string();
 
     let to = params
         .get("to")
-        .map(|s| parse_timestamp_to_unix(s))
-        .unwrap_or(Ok(i64::MAX))
-        .unwrap_or(i64::MAX);
+        .map(String::as_str)
+        .unwrap_or("9999-12-31T23:59:59Z")
+        .to_string();
 
     let result = sqlx::query(
         "
@@ -153,7 +147,7 @@ pub async fn connect_db() -> anyhow::Result<Pool<Sqlite>> {
                 correlation_id TEXT PRIMARY KEY,
                 is_default INT,
                 amount REAL NOT NULL,
-                timestamp INTEGER NOT NULL
+                timestamp TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_payments_timestamp
             ON payments (timestamp);

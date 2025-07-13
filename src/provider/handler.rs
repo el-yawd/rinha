@@ -91,8 +91,8 @@ impl ProviderHandler {
     /// Process a payment using a naive strategy. If default provider is down try fallback, if both fails drop the payment.
     // TODO: Explore different strategies for handling payment processing failures.
     pub async fn process_payment(&self, payload: PaymentDTO) -> anyhow::Result<()> {
-        let now_local = Utc::now().timestamp();
-        let payload = PaymentServiceDTO::new(payload, Utc::now().to_rfc3339());
+        let now = Utc::now().to_rfc3339();
+        let payload = PaymentServiceDTO::new(payload, now.clone());
         match self
             .client
             .post(URLS.get("default_payments").unwrap())
@@ -106,7 +106,7 @@ impl ProviderHandler {
             .bind(&payload.correlation_id.to_string())
             .bind(&payload.amount)
             .bind(1)
-            .bind(&now_local)
+            .bind(&now)
             .execute(&self.pool)
             .await?;
 
@@ -127,7 +127,7 @@ impl ProviderHandler {
                             .bind(&payload.correlation_id.to_string())
                             .bind(&payload.amount)
                             .bind(0)
-                            .bind(&now_local)
+                            .bind(&now)
                             .execute(&self.pool)
                             .await?;
                 }
