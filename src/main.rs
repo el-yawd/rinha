@@ -27,7 +27,6 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
     const NUM_WORKERS: usize = 5;
 
     let pool = connect_db().await?;
@@ -137,21 +136,26 @@ pub async fn connect_db() -> anyhow::Result<Pool<Sqlite>> {
     let db_url = env::var("DATABASE_URL").unwrap_or("data/app.db".to_string());
     let conn_opts = SqliteConnectOptions::from_str(&db_url)?
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal);
+        .synchronous(SqliteSynchronous::Normal)
+        .pragma("optimize", "0x10002");
 
     let pool = SqlitePool::connect_with(conn_opts).await?;
 
-    // TODO: Improve basic datatypes
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS payments (
-                correlation_id TEXT PRIMARY KEY,
-                is_default INT,
-                amount REAL NOT NULL,
-                timestamp TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_payments_timestamp
-            ON payments (timestamp);
-        ",
+            correlation_id TEXT PRIMARY KEY,
+            is_default INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            timestamp TEXT NOT NULL
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_payments_timestamp
+        ON payments (timestamp);
+
+        CREATE INDEX IF NOT EXISTS idx_payments_provider
+        ON payments (is_default, timestamp);
+
+        ANALYZE payments;",
     )
     .execute(&pool)
     .await?;
