@@ -1,6 +1,5 @@
-# TODO: Manage resources to each service
 services:
-  api-1:
+  api-1: &api
     build:
       context: .
       dockerfile: Dockerfile
@@ -15,22 +14,18 @@ services:
       - DATABASE_URL=data/app.db
     volumes:
       - shared_db:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.7"
+          memory: 150M
 
   api-2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - ":9999"
-    networks:
-      - backend
-      - payment-processor
+    <<: *api
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - DATABASE_URL=data/app.db
-    volumes:
-      - shared_db:/data
 
   load_balancer:
     image: nginx:latest
@@ -43,6 +38,11 @@ services:
       - backend
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 150M
 
 networks:
   backend:
