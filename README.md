@@ -1,7 +1,1 @@
-# Rinha
-
-
-
-## Todos:
-
--
+# Rinha de backend - 2025
