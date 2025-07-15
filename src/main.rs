@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
                 .layer(Extension(pool))
                 .with_state(AppState {
                     handler_sender,
-                    summary_cache: Arc::new(Cache::new(1000)),
+                    summary_cache: Arc::new(Cache::new(100)),
                 });
 
             let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
@@ -167,15 +167,19 @@ pub async fn spawn_worker(rx: async_channel::Receiver<PaymentDTO>, handler: Prov
 
 pub async fn connect_db() -> anyhow::Result<Pool<Sqlite>> {
     let db_url = env::var("DATABASE_URL").unwrap_or("data/app.db".to_string());
+    let cache_size = env::var("CACHE_SIZE").unwrap_or("-4000".to_string());
+    let mmap_size = env::var("MMAP_SIZE").unwrap_or("5000000".to_string());
+    let busy_timeout = env::var("BUSY_TIMEOUT").unwrap_or("10".to_string());
+
     let conn_opts = SqliteConnectOptions::new()
         .filename(&db_url)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Off) // We just have to survive for 5 min :)
-        .busy_timeout(Duration::from_secs(10))
+        .busy_timeout(Duration::from_secs(busy_timeout.parse()?))
         .pragma("temp_store", "MEMORY")
-        .pragma("mmap_size", "10000000")
-        .pragma("cache_size", "-40000") // double of default
+        .pragma("mmap_size", mmap_size)
+        .pragma("cache_size", cache_size)
         .pragma("optimize", "0x10002");
 
     let pool = SqlitePool::connect_with(conn_opts).await?;
