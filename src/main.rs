@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::env;
-use std::str::FromStr;
+use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 use axum::Extension;
 use axum::extract::State;
@@ -11,11 +13,12 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use moka::future::Cache;
 use provider::handler::ProviderHandler;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 use sqlx::{Pool, Sqlite};
 use sqlx::{Row, SqlitePool};
-use types::PaymentDTO;
+use types::{GlobalSummary, PaymentDTO, Summary};
 
 mod provider;
 mod types;
@@ -23,32 +26,46 @@ mod types;
 #[derive(Clone)]
 struct AppState {
     pub handler_sender: async_channel::Sender<PaymentDTO>,
+    pub summary_cache: Arc<Cache<String, GlobalSummary>>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     const NUM_WORKERS: usize = 5;
 
-    let pool = connect_db().await?;
+    match connect_db().await {
+        Ok(pool) => {
+            // Initialize one handler per worker
+            let handler = ProviderHandler::new(pool.clone()).await?;
 
-    // Initialize one handler per worker
-    let handler = ProviderHandler::new(pool.clone()).await?;
+            let (handler_sender, handler_receiver) = async_channel::unbounded::<PaymentDTO>();
 
-    let (handler_sender, handler_receiver) = async_channel::unbounded::<PaymentDTO>();
-    for _ in 0..NUM_WORKERS {
-        spawn_worker(handler_receiver.clone(), handler.clone()).await;
+            for _ in 0..NUM_WORKERS {
+                spawn_worker(handler_receiver.clone(), handler.clone()).await;
+            }
+
+            // HTTP router
+            let app = Router::new()
+                .route("/payments-summary", get(get_payments_summary))
+                .route("/payments", post(exec_payment))
+                .route("/purge-payments", post(purge_payments))
+                .layer(Extension(pool))
+                .with_state(AppState {
+                    handler_sender,
+                    summary_cache: Arc::new(Cache::new(1000)),
+                });
+
+            let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
+            axum::serve(listener, app).await?;
+            return Ok(());
+        }
+
+        Err(err) => {
+            println!("Something went wrong with the db, entering in sleep mode for debugging...");
+            println!("Error: {}", err);
+            sleep(Duration::from_secs(100000000000));
+        }
     }
-
-    // HTTP router
-    let app = Router::new()
-        .route("/payments-summary", get(get_payments_summary))
-        .route("/payments", post(exec_payment))
-        .route("/purge-payments", post(purge_payments))
-        .layer(Extension(pool))
-        .with_state(AppState { handler_sender });
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
-    axum::serve(listener, app).await?;
 
     Ok(())
 }
@@ -56,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
 async fn get_payments_summary(
     Query(params): Query<HashMap<String, String>>,
     Extension(pool): Extension<Pool<Sqlite>>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
     let from = params
         .get("from")
@@ -68,6 +86,12 @@ async fn get_payments_summary(
         .map(String::as_str)
         .unwrap_or("9999-12-31T23:59:59Z")
         .to_string();
+
+    let cache_key = format!("{from}:{to}");
+
+    if let Some(summary) = state.summary_cache.get(&cache_key).await {
+        return (StatusCode::OK, Json(summary));
+    }
 
     let result = sqlx::query(
         "
@@ -85,22 +109,31 @@ async fn get_payments_summary(
     .await
     .unwrap();
 
-    let mut summary = serde_json::json!({
-        "default": { "totalRequests": 0, "totalAmount": 0.0 },
-        "fallback": { "totalRequests": 0, "totalAmount": 0.0 }
-    });
+    let mut default = Summary {
+        total_requests: 0,
+        total_amount: 0.0,
+    };
+
+    let mut fallback = Summary {
+        total_requests: 0,
+        total_amount: 0.0,
+    };
 
     for row in result {
-        if row.get::<u8, _>(0) == 1 {
-            summary["default"]["totalRequests"] = row.get::<u64, _>(1).into();
-            summary["default"]["totalAmount"] = row.get::<f64, _>(2).into();
+        let is_default: u8 = row.get(0);
+        let count: u64 = row.get(1);
+        let sum: f64 = row.get(2);
+
+        if is_default == 1 {
+            default.total_requests = count;
+            default.total_amount = sum;
         } else {
-            summary["fallback"]["totalRequests"] = row.get::<u64, _>(1).into();
-            summary["fallback"]["totalAmount"] = row.get::<f64, _>(2).into();
+            fallback.total_requests = count;
+            fallback.total_amount = sum;
         }
     }
 
-    (StatusCode::OK, Json(summary))
+    (StatusCode::OK, Json(GlobalSummary { default, fallback }))
 }
 
 async fn exec_payment(
@@ -134,9 +167,15 @@ pub async fn spawn_worker(rx: async_channel::Receiver<PaymentDTO>, handler: Prov
 
 pub async fn connect_db() -> anyhow::Result<Pool<Sqlite>> {
     let db_url = env::var("DATABASE_URL").unwrap_or("data/app.db".to_string());
-    let conn_opts = SqliteConnectOptions::from_str(&db_url)?
+    let conn_opts = SqliteConnectOptions::new()
+        .filename(&db_url)
+        .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Off) // We just have to survive for 5 min :)
+        .busy_timeout(Duration::from_secs(10))
+        .pragma("temp_store", "MEMORY")
+        .pragma("mmap_size", "10000000")
+        .pragma("cache_size", "-40000") // double of default
         .pragma("optimize", "0x10002");
 
     let pool = SqlitePool::connect_with(conn_opts).await?;

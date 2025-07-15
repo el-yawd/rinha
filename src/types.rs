@@ -8,18 +8,18 @@ pub struct PaymentDTO {
     pub amount: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct GlobalSummary {
-    default: Summary,
-    fallback: Summary,
+    pub default: Summary,
+    pub fallback: Summary,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Summary {
     #[serde(rename = "totalRequests")]
-    total_requests: u64,
+    pub total_requests: u64,
     #[serde(rename = "totalAmount")]
-    total_amount: f64,
+    pub total_amount: f64,
 }
 
 #[derive(Serialize)]
