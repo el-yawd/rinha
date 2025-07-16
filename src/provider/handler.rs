@@ -4,7 +4,6 @@ use ::serde::Deserialize;
 use axum::http::HeaderMap;
 use chrono::Utc;
 use reqwest::Client;
-use sqlx::{Pool, Sqlite};
 use tokio::sync::RwLock;
 
 use crate::types::{PaymentDTO, PaymentServiceDTO};
@@ -17,13 +16,12 @@ pub struct ProviderHandler {
     pub current_provider: CurrentProvider,
     pub fallback_provider: Arc<RwLock<Provider>>,
     pub default_provider: Arc<RwLock<Provider>>,
-    pub pool: Pool<Sqlite>,
-
-    payments: Vec<PaymentDTO>,
+    default_tree: sled::Tree,
+    fallback_tree: sled::Tree,
 }
 
 impl ProviderHandler {
-    pub async fn new(pool: Pool<Sqlite>) -> anyhow::Result<Self> {
+    pub async fn new(default_tree: sled::Tree, fallback_tree: sled::Tree) -> anyhow::Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert("X-Rinha-Token", "123".parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
@@ -83,8 +81,8 @@ impl ProviderHandler {
                 default_health.failing,
                 default_health.min_response_time,
             ))),
-            payments: Vec::with_capacity(100),
-            pool,
+            fallback_tree,
+            default_tree,
         })
     }
 
@@ -102,13 +100,8 @@ impl ProviderHandler {
             .error_for_status()
         {
             Ok(_) => {
-                sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
-            .bind(&payload.correlation_id.to_string())
-            .bind(&payload.amount)
-            .bind(1)
-            .bind(&now)
-            .execute(&self.pool)
-            .await?;
+                self.default_tree
+                    .insert(now.as_bytes(), &payload.amount.to_be_bytes())?;
 
                 Ok(())
             }
@@ -123,13 +116,8 @@ impl ProviderHandler {
                     .error_for_status();
 
                 if res.is_ok() {
-                    sqlx::query("INSERT INTO payments (correlation_id, amount, is_default, timestamp) VALUES (?, ?, ?, ?)")
-                            .bind(&payload.correlation_id.to_string())
-                            .bind(&payload.amount)
-                            .bind(0)
-                            .bind(&now)
-                            .execute(&self.pool)
-                            .await?;
+                    self.fallback_tree
+                        .insert(now.as_bytes(), &payload.amount.to_be_bytes())?;
                 }
 
                 Ok(())

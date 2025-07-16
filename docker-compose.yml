@@ -11,10 +11,8 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
-      - DATABASE_URL=data/app.db
-      - CACHE_SIZE=-4000
-      - MMAP_SIZE=5000000
-      - BUSY_TIMEOUT=10
+      - NUM_WORKERS=5
+      - DATABASE_URL=data/app_db
     volumes:
       - shared_db:/data
     deploy:
@@ -27,10 +25,8 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
-      - DATABASE_URL=data/app.db
-      - CACHE_SIZE=-4000
-      - MMAP_SIZE=5000000
-      - BUSY_TIMEOUT=10
+      - NUM_WORKERS=5
+      - DATABASE_URL=data/app_db
 
   load_balancer:
     image: nginx:latest
