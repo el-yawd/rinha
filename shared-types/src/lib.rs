@@ -28,6 +28,15 @@ pub struct GlobalSummary {
     pub fallback: Summary,
 }
 
+impl Default for GlobalSummary {
+    fn default() -> Self {
+        Self {
+            default: Summary::new(),
+            fallback: Summary::new(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Summary {
     #[serde(rename = "totalRequests")]

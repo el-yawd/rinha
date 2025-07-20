@@ -20,11 +20,6 @@ use tokio::net::UnixStream;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-const RINHADB_SOCK: LazyLock<String> =
-    LazyLock::new(|| env::var("RINHADB_SOCK").unwrap_or("/tmp/rinha.sock".to_string()));
-const API_1_SOCK: LazyLock<String> =
-    LazyLock::new(|| env::var("API_1_SOCK").unwrap_or("/tmp/api-1.sock".to_string()));
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let num_workers: usize = env::var("NUM_WORKERS")
@@ -32,16 +27,15 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .unwrap();
 
-    let handler = Arc::new(ProviderHandler::new().await?);
-
-    if Path::new(API_1_SOCK.as_str()).exists() {
-        std::fs::remove_file(API_1_SOCK.clone())?;
+    if Path::new("/tmp/api-1.sock").exists() {
+        std::fs::remove_file("/tmp/api-1.sock")?;
     }
 
-    let listener = UnixListener::bind(API_1_SOCK.as_str())?;
-    println!("API-1 listening on {}", API_1_SOCK.as_str());
+    let listener = UnixListener::bind("/tmp/api-1.sock")?;
+    println!("API-1 listening on {}", "/tmp/api-1.sock");
 
     let (tx, rx): (Sender<PaymentDTO>, Receiver<PaymentDTO>) = bounded(1000);
+    let handler = Arc::new(ProviderHandler::new().await?);
 
     for i in 0..num_workers {
         let handler = Arc::clone(&handler);
@@ -88,7 +82,6 @@ pub struct ProviderHandler {
     pub current_provider: CurrentProvider,
     pub fallback_provider: Arc<RwLock<Provider>>,
     pub default_provider: Arc<RwLock<Provider>>,
-    db_stream: Arc<RwLock<UnixStream>>,
 }
 
 impl ProviderHandler {
@@ -139,12 +132,6 @@ impl ProviderHandler {
         )
         .expect("Unable to connect with external providers, Aborting...");
 
-        let db_stream = Arc::new(RwLock::new(
-            UnixStream::connect(RINHADB_SOCK.as_str())
-                .await
-                .expect("failed to connect to RinhaDB"),
-        ));
-
         Ok(Self {
             client,
             current_provider: CurrentProvider::Default,
@@ -158,7 +145,6 @@ impl ProviderHandler {
                 default_health.failing,
                 default_health.min_response_time,
             ))),
-            db_stream,
         })
     }
 
@@ -176,26 +162,16 @@ impl ProviderHandler {
             .error_for_status()
         {
             Ok(_) => {
-                let serialized = serde_json::to_string(&shared_types::Message::Write {
+                let mut stream = UnixStream::connect("/tmp/rinha.sock").await?;
+                let msg = shared_types::Message::Write {
                     key: now,
                     value: payload.amount,
                     tree: shared_types::SledTree::Default,
-                })
-                .unwrap();
-
-                let mut stream = self.db_stream.write().await;
-
-                stream
-                    .write_all(serialized.as_bytes())
-                    .await
-                    .expect("failed to write to RinhaDB");
-                stream
-                    .write_all(b"\n")
-                    .await
-                    .expect("failed to write newline");
-
-                stream.flush().await.expect("failed to flush");
-
+                };
+                let serialized = serde_json::to_string(&msg)?;
+                stream.write_all(serialized.as_bytes()).await?;
+                stream.write_all(b"\n").await?;
+                stream.flush().await?;
                 Ok(())
             }
 
@@ -209,25 +185,16 @@ impl ProviderHandler {
                     .error_for_status();
 
                 if res.is_ok() {
-                    let serialized = serde_json::to_string(&shared_types::Message::Write {
+                    let mut stream = UnixStream::connect("/tmp/rinha.sock").await?;
+                    let msg = shared_types::Message::Write {
                         key: now,
                         value: payload.amount,
                         tree: shared_types::SledTree::Fallback,
-                    })
-                    .unwrap();
-
-                    let mut stream = self.db_stream.write().await;
-
-                    stream
-                        .write_all(serialized.as_bytes())
-                        .await
-                        .expect("failed to write to RinhaDB");
-                    stream
-                        .write_all(b"\n")
-                        .await
-                        .expect("failed to write newline");
-
-                    stream.flush().await.expect("failed to flush");
+                    };
+                    let serialized = serde_json::to_string(&msg)?;
+                    stream.write_all(serialized.as_bytes()).await?;
+                    stream.write_all(b"\n").await?;
+                    stream.flush().await?;
                 }
 
                 Ok(())

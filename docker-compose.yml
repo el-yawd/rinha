@@ -3,8 +3,6 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    ports:
-      - ":9999"
     networks:
       - payment-processor
     depends_on:
@@ -18,16 +16,6 @@ services:
       - API_2_SOCK=/tmp/api-2.sock
     volumes:
       - ipc-socket:/tmp
-
-  api-2:
-    <<: *api
-    environment:
-      - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
-      - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
-      - NUM_WORKERS=5
-      - RINHADB_SOCK=/tmp/rinha.sock
-      - API_1_SOCK=/tmp/api-1.sock
-      - API_2_SOCK=/tmp/api-2.sock
 
   rinha-db:
     build:
@@ -46,7 +34,6 @@ services:
       - "9999:9999"
     depends_on:
       - api-1
-      - api-2
       - rinha-db
     volumes:
       - ipc-socket:/tmp

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, sync::LazyLock};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use anyhow;
@@ -17,20 +17,14 @@ use tokio::{
     net::UnixStream,
 };
 
-const RINHADB_SOCK: LazyLock<String> =
-    LazyLock::new(|| env::var("RINHADB_SOCK").unwrap_or("/tmp/rinha.sock".to_string()));
-const API_1_SOCK: LazyLock<String> =
-    LazyLock::new(|| env::var("API_1_SOCK").unwrap_or("/tmp/api-1.sock".to_string()));
-const API_2_SOCK: LazyLock<String> =
-    LazyLock::new(|| env::var("API_2_SOCK").unwrap_or("/tmp/api-2.sock".to_string()));
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // HTTP router
     let app = Router::new()
         .route("/payments-summary", get(get_payments_summary))
-        .route("/payments", post(exec_payment))
-        .route("/purge-payments", post(purge_payments));
+        .route("/payments", post(exec_payment));
+    // Purge is broken so far, let's ignore it for now
+    // .route("/purge-payments", post(purge_payments));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
     axum::serve(listener, app).await?;
@@ -50,7 +44,7 @@ async fn get_payments_summary(Query(params): Query<HashMap<String, String>>) -> 
 
     let message = shared_types::Message::Read { from, to };
 
-    let mut stream = UnixStream::connect(RINHADB_SOCK.as_str())
+    let mut stream = UnixStream::connect("/tmp/rinha.sock")
         .await
         .expect("failed to connect to RinhaDB");
 
@@ -81,7 +75,7 @@ async fn get_payments_summary(Query(params): Query<HashMap<String, String>>) -> 
 
 // TODO: Round-robin logic
 async fn exec_payment(Json(payload): Json<PaymentDTO>) -> impl IntoResponse {
-    let mut stream = UnixStream::connect(API_1_SOCK.as_str())
+    let mut stream = UnixStream::connect("/tmp/api-1.sock")
         .await
         .expect("failed to connect to API-1");
     let serialized = serde_json::to_string(&payload).expect("failed to serialize payload");
@@ -101,7 +95,7 @@ async fn exec_payment(Json(payload): Json<PaymentDTO>) -> impl IntoResponse {
 }
 
 async fn purge_payments() -> impl IntoResponse {
-    let mut stream = UnixStream::connect(RINHADB_SOCK.as_str())
+    let mut stream = UnixStream::connect("/tmp/rinha.sock")
         .await
         .expect("failed to connect to RinhaDB");
 
