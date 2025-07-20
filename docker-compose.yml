@@ -2,55 +2,58 @@ services:
   api-1: &api
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: api/Dockerfile
     ports:
       - ":9999"
     networks:
-      - backend
       - payment-processor
+    depends_on:
+      - rinha-db
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - NUM_WORKERS=5
-      - DATABASE_URL=data/app_db
+      - RINHADB_SOCK=/tmp/rinha.sock
+      - API_1_SOCK=/tmp/api-1.sock
+      - API_2_SOCK=/tmp/api-2.sock
     volumes:
-      - shared_db:/data
-    deploy:
-      resources:
-        limits:
-          cpus: "0.7"
-          memory: 135M
+      - ipc-socket:/tmp
+
   api-2:
     <<: *api
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - NUM_WORKERS=5
-      - DATABASE_URL=data/app_db
+      - RINHADB_SOCK=/tmp/rinha.sock
+      - API_1_SOCK=/tmp/api-1.sock
+      - API_2_SOCK=/tmp/api-2.sock
+
+  rinha-db:
+    build:
+      context: .
+      dockerfile: rinha-db/Dockerfile
+    environment:
+      - RINHADB_SOCK=/tmp/rinha.sock
+    volumes:
+      - ipc-socket:/tmp
 
   load_balancer:
-    image: nginx:latest
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
     ports:
-      - "9999:80"
+      - "9999:9999"
     depends_on:
       - api-1
       - api-2
-    networks:
-      - backend
+      - rinha-db
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    deploy:
-      resources:
-        limits:
-          cpus: "0.1"
-          memory: 80M
+      - ipc-socket:/tmp
 
 networks:
-  backend:
-    driver: bridge
   payment-processor:
     external: true
 
 volumes:
-  shared_db:
-    driver: local
+  ipc-socket:

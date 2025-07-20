@@ -1,0 +1,10 @@
+[package]
+name = "shared-types"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sled = { workspace = true }
+uuid = { workspace = true }

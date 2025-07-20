@@ -1,0 +1,18 @@
+[package]
+name = "rinha_db"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+authors = ["Diego Reis"]
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+sled = { workspace = true }
+shared-types = { workspace = true }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"

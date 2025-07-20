@@ -1,0 +1,19 @@
+[package]
+name = "gateway"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+authors = ["Diego Reis"]
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+shared-types = { workspace = true }
+uuid = { workspace = true }
+axum = "0.8.4"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
