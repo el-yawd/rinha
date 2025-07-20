@@ -1,28 +1,39 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path, sync::Arc};
 use uuid::Uuid;
 
 use anyhow;
 use axum::{
     Json, Router,
-    extract::Query,
+    extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
-use shared_types::{self, GlobalSummary, PaymentDTO};
+use shared_types::{self, GlobalSummary, PaymentDTO, UnixConnectionPool};
 use tokio::{
     self,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
 };
 
+#[derive(Clone)]
+struct AppState {
+    db_pool: Arc<UnixConnectionPool>,
+    api_pool: Arc<UnixConnectionPool>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // HTTP router
     let app = Router::new()
         .route("/payments-summary", get(get_payments_summary))
-        .route("/payments", post(exec_payment));
+        .route("/payments", post(exec_payment))
+        .with_state(AppState {
+            db_pool: Arc::new(UnixConnectionPool::new(Path::new("/tmp/rinha.sock"), 10).await?),
+            api_pool: Arc::new(UnixConnectionPool::new(Path::new("/tmp/api-1.sock"), 10).await?),
+        });
+
     // Purge is broken so far, let's ignore it for now
     // .route("/purge-payments", post(purge_payments));
 
@@ -32,7 +43,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn get_payments_summary(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+async fn get_payments_summary(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let from = params
         .get("from")
         .cloned()
@@ -44,9 +58,7 @@ async fn get_payments_summary(Query(params): Query<HashMap<String, String>>) -> 
 
     let message = shared_types::Message::Read { from, to };
 
-    let mut stream = UnixStream::connect("/tmp/rinha.sock")
-        .await
-        .expect("failed to connect to RinhaDB");
+    let mut stream = state.db_pool.acquire().await.unwrap();
 
     let serialized = serde_json::to_string(&message).expect("failed to serialize message");
 
@@ -61,7 +73,7 @@ async fn get_payments_summary(Query(params): Query<HashMap<String, String>>) -> 
 
     stream.flush().await.expect("failed to flush");
 
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream.take().unwrap());
     let mut response_line = String::new();
     reader
         .read_line(&mut response_line)
@@ -74,10 +86,11 @@ async fn get_payments_summary(Query(params): Query<HashMap<String, String>>) -> 
 }
 
 // TODO: Round-robin logic
-async fn exec_payment(Json(payload): Json<PaymentDTO>) -> impl IntoResponse {
-    let mut stream = UnixStream::connect("/tmp/api-1.sock")
-        .await
-        .expect("failed to connect to API-1");
+async fn exec_payment(
+    State(state): State<AppState>,
+    Json(payload): Json<PaymentDTO>,
+) -> impl IntoResponse {
+    let mut stream = state.api_pool.acquire().await.unwrap();
     let serialized = serde_json::to_string(&payload).expect("failed to serialize payload");
 
     stream

@@ -7,6 +7,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
 use shared_types::PaymentDTO;
+use shared_types::UnixConnectionPool;
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
@@ -82,6 +83,7 @@ pub struct ProviderHandler {
     pub current_provider: CurrentProvider,
     pub fallback_provider: Arc<RwLock<Provider>>,
     pub default_provider: Arc<RwLock<Provider>>,
+    db_pool: Arc<UnixConnectionPool>,
 }
 
 impl ProviderHandler {
@@ -132,6 +134,8 @@ impl ProviderHandler {
         )
         .expect("Unable to connect with external providers, Aborting...");
 
+        let db_pool = Arc::new(UnixConnectionPool::new(Path::new("/tmp/rinha.sock"), 10).await?);
+
         Ok(Self {
             client,
             current_provider: CurrentProvider::Default,
@@ -145,6 +149,7 @@ impl ProviderHandler {
                 default_health.failing,
                 default_health.min_response_time,
             ))),
+            db_pool,
         })
     }
 
@@ -162,7 +167,7 @@ impl ProviderHandler {
             .error_for_status()
         {
             Ok(_) => {
-                let mut stream = UnixStream::connect("/tmp/rinha.sock").await?;
+                let mut stream = self.db_pool.acquire().await?;
                 let msg = shared_types::Message::Write {
                     key: now,
                     value: payload.amount,
@@ -185,7 +190,7 @@ impl ProviderHandler {
                     .error_for_status();
 
                 if res.is_ok() {
-                    let mut stream = UnixStream::connect("/tmp/rinha.sock").await?;
+                    let mut stream = self.db_pool.acquire().await?;
                     let msg = shared_types::Message::Write {
                         key: now,
                         value: payload.amount,
