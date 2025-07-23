@@ -1,7 +1,8 @@
 # Rinha de backend - 2025
 
-todo:
+![Caranguejo fantasiado de Palpatine derrotando o mascote de Go, PHP, Java e Elixir](./assets/rinha.png)
 
-- Change UnixStream to UnixDatagram
+## TODO:
+
 - Test if may is faster
 - Somehow we still have inconsistencies, investigate that
