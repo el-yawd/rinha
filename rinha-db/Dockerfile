@@ -12,6 +12,5 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 
 # Use scratch or minimal base
 FROM alpine:latest
-RUN mkdir -p /data && chmod 755 /data
-COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-musl/release/rinha /usr/local/bin/rinha
-CMD ["rinha"]
+COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-musl/release/rinha_db /usr/local/bin/rinha_db
+CMD ["rinha_db"]
