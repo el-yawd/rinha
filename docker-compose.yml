@@ -10,19 +10,27 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
-      - NUM_WORKERS=5
-      - RINHADB_SOCK=/tmp/rinha.sock
-      - API_1_SOCK=/tmp/api-1.sock
-      - API_2_SOCK=/tmp/api-2.sock
+      - NUM_WORKERS=10
+      - API_PATH=/tmp/api-1.sock
     volumes:
       - ipc-socket:/tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "0.7"
+          memory: 165M
+  api-2:
+    <<: *api
+    environment:
+      - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
+      - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
+      - NUM_WORKERS=10
+      - API_PATH=/tmp/api-2.sock
 
   rinha-db:
     build:
       context: .
       dockerfile: rinha-db/Dockerfile
-    environment:
-      - RINHADB_SOCK=/tmp/rinha.sock
     volumes:
       - ipc-socket:/tmp
 
@@ -37,6 +45,11 @@ services:
       - rinha-db
     volumes:
       - ipc-socket:/tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 20M
 
 networks:
   payment-processor:

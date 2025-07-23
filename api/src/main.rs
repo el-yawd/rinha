@@ -1,6 +1,6 @@
 use async_channel::Receiver;
 use async_channel::Sender;
-use async_channel::bounded;
+use async_channel::unbounded;
 use axum::http::HeaderMap;
 use chrono::Utc;
 use reqwest::Client;
@@ -17,8 +17,6 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::UnixListener;
-use tokio::net::UnixStream;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 #[tokio::main]
@@ -27,15 +25,16 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or("5".to_string())
         .parse()
         .unwrap();
+    let api_path = env::var("API_PATH").unwrap_or("/tmp/api-1.sock".to_string());
 
-    if Path::new("/tmp/api-1.sock").exists() {
-        std::fs::remove_file("/tmp/api-1.sock")?;
+    if Path::new(api_path.as_str()).exists() {
+        std::fs::remove_file(api_path.as_str())?;
     }
 
-    let listener = UnixListener::bind("/tmp/api-1.sock")?;
-    println!("API-1 listening on {}", "/tmp/api-1.sock");
+    let listener = UnixListener::bind(api_path.as_str())?;
+    println!("API listening on {}", api_path.as_str());
 
-    let (tx, rx): (Sender<PaymentDTO>, Receiver<PaymentDTO>) = bounded(1000);
+    let (tx, rx): (Sender<PaymentDTO>, Receiver<PaymentDTO>) = unbounded();
     let handler = Arc::new(ProviderHandler::new().await?);
 
     for i in 0..num_workers {
@@ -81,15 +80,12 @@ async fn main() -> anyhow::Result<()> {
 pub struct ProviderHandler {
     pub client: Client,
     pub current_provider: CurrentProvider,
-    pub fallback_provider: Arc<RwLock<Provider>>,
-    pub default_provider: Arc<RwLock<Provider>>,
     db_pool: Arc<UnixConnectionPool>,
 }
 
 impl ProviderHandler {
     pub async fn new() -> anyhow::Result<Self> {
         let mut headers = HeaderMap::new();
-        headers.insert("X-Rinha-Token", "123".parse()?);
         headers.insert("Content-Type", "application/json".parse()?);
         // TODO: Tweak Client config
         let client = Client::builder()
@@ -98,57 +94,11 @@ impl ProviderHandler {
             .default_headers(headers.clone())
             .build()?;
 
-        let (default_sum, fallback_sum, default_health, fallback_health) = tokio::try_join!(
-            async {
-                client
-                    .get(URLS.get("default_summary").unwrap())
-                    .send()
-                    .await?
-                    .json::<PaymentSummaryResponse>()
-                    .await
-            },
-            async {
-                client
-                    .get(URLS.get("fallback_summary").unwrap())
-                    .send()
-                    .await?
-                    .json::<PaymentSummaryResponse>()
-                    .await
-            },
-            async {
-                client
-                    .get(URLS.get("default_payments_health").unwrap())
-                    .send()
-                    .await?
-                    .json::<ProviderHealthResponse>()
-                    .await
-            },
-            async {
-                client
-                    .get(URLS.get("fallback_payments_health").unwrap())
-                    .send()
-                    .await?
-                    .json::<ProviderHealthResponse>()
-                    .await
-            }
-        )
-        .expect("Unable to connect with external providers, Aborting...");
-
         let db_pool = Arc::new(UnixConnectionPool::new(Path::new("/tmp/rinha.sock"), 10).await?);
 
         Ok(Self {
             client,
             current_provider: CurrentProvider::Default,
-            fallback_provider: Arc::new(RwLock::new(Provider::new(
-                Fee(fallback_sum.fee_per_transaction),
-                fallback_health.failing,
-                fallback_health.min_response_time,
-            ))),
-            default_provider: Arc::new(RwLock::new(Provider::new(
-                Fee(default_sum.fee_per_transaction),
-                default_health.failing,
-                default_health.min_response_time,
-            ))),
             db_pool,
         })
     }
@@ -244,14 +194,6 @@ pub static URLS: LazyLock<HashMap<&'static str, String>> = LazyLock::new(|| {
             "fallback_payments_health",
             format!("{}/payments/service-health", fallback_base),
         ),
-        (
-            "default_summary",
-            format!("{}/admin/payments-summary", default_base),
-        ),
-        (
-            "fallback_summary",
-            format!("{}/admin/payments-summary", fallback_base),
-        ),
     ])
 });
 
@@ -259,26 +201,6 @@ pub static URLS: LazyLock<HashMap<&'static str, String>> = LazyLock::new(|| {
 pub enum CurrentProvider {
     Default,
     Fallback,
-}
-
-#[derive(Debug, Clone)]
-pub struct Fee(pub f64);
-
-#[derive(Debug, Clone)]
-pub struct Provider {
-    pub fee: Fee,
-    pub is_failing: bool,
-    pub min_res_time: u64,
-}
-
-impl Provider {
-    pub fn new(fee: Fee, is_failing: bool, min_res_time: u64) -> Self {
-        Provider {
-            fee,
-            is_failing,
-            min_res_time,
-        }
-    }
 }
 
 #[derive(Serialize)]
