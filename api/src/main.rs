@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 use tokio;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -94,7 +95,7 @@ impl ProviderHandler {
             .default_headers(headers.clone())
             .build()?;
 
-        let db_pool = Arc::new(UnixConnectionPool::new(Path::new("/tmp/rinha.sock"), 10).await?);
+        let db_pool = Arc::new(UnixConnectionPool::new(Path::new("/tmp/rinha.sock"), 50).await?);
 
         Ok(Self {
             client,
@@ -108,15 +109,16 @@ impl ProviderHandler {
     pub async fn process_payment(&self, payload: PaymentDTO) -> anyhow::Result<()> {
         let now = Utc::now().to_rfc3339();
         let payload = PaymentServiceDTO::new(payload, now.clone());
-        match self
-            .client
-            .post(URLS.get("default_payments").unwrap())
-            .body(serde_json::to_string(&payload)?)
-            .send()
-            .await?
-            .error_for_status()
-        {
-            Ok(_) => {
+        for _ in 0..5 {
+            let res = self
+                .client
+                .post(URLS.get("default_payments").unwrap())
+                .body(serde_json::to_string(&payload)?)
+                .send()
+                .await?
+                .error_for_status();
+
+            if res.is_ok() {
                 let mut stream = self.db_pool.acquire().await?;
                 let msg = shared_types::Message::Write {
                     key: now,
@@ -127,34 +129,33 @@ impl ProviderHandler {
                 stream.write_all(serialized.as_bytes()).await?;
                 stream.write_all(b"\n").await?;
                 stream.flush().await?;
-                Ok(())
+                return Ok(());
             }
-
-            Err(_) => {
-                let res = self
-                    .client
-                    .post(URLS.get("fallback_payments").unwrap())
-                    .body(serde_json::to_string(&payload)?)
-                    .send()
-                    .await?
-                    .error_for_status();
-
-                if res.is_ok() {
-                    let mut stream = self.db_pool.acquire().await?;
-                    let msg = shared_types::Message::Write {
-                        key: now,
-                        value: payload.amount,
-                        tree: shared_types::SledTree::Fallback,
-                    };
-                    let serialized = serde_json::to_string(&msg)?;
-                    stream.write_all(serialized.as_bytes()).await?;
-                    stream.write_all(b"\n").await?;
-                    stream.flush().await?;
-                }
-
-                Ok(())
-            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
+
+        let res = self
+            .client
+            .post(URLS.get("fallback_payments").unwrap())
+            .body(serde_json::to_string(&payload)?)
+            .send()
+            .await?
+            .error_for_status();
+
+        if res.is_ok() {
+            let mut stream = self.db_pool.acquire().await?;
+            let msg = shared_types::Message::Write {
+                key: now,
+                value: payload.amount,
+                tree: shared_types::SledTree::Fallback,
+            };
+            let serialized = serde_json::to_string(&msg)?;
+            stream.write_all(serialized.as_bytes()).await?;
+            stream.write_all(b"\n").await?;
+            stream.flush().await?;
+        }
+
+        Ok(())
     }
 }
 
