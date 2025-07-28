@@ -74,8 +74,7 @@ async fn database_worker(
             }
             Command::Purge => {
                 let result = (|| -> anyhow::Result<()> {
-                    db.drop_tree("fallback")?;
-                    db.drop_tree("default")?;
+                    db.clear()?;
                     Ok(())
                 })();
 

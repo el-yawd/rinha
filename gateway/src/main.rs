@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/payments-summary", get(get_payments_summary))
         .route("/payments", post(exec_payment))
+        .route("/purge-payments", post(purge_payments))
         .with_state(AppState {
             db_pool: Arc::new(UnixConnectionPool::new(Path::new("/tmp/rinha.sock"), 10).await?),
             api_pool: [
@@ -45,9 +46,6 @@ async fn main() -> anyhow::Result<()> {
             ],
             balancer: Arc::new(AtomicU64::new(0)),
         });
-
-    // Purge is broken so far, let's ignore it for now
-    // .route("/purge-payments", post(purge_payments));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
     axum::serve(listener, app).await?;
@@ -97,7 +95,6 @@ async fn get_payments_summary(
     (StatusCode::OK, Json(summary))
 }
 
-// TODO: Round-robin logic
 async fn exec_payment(
     State(state): State<AppState>,
     Json(payload): Json<PaymentDTO>,
