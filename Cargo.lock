@@ -460,6 +460,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",
+ "reqwest",
  "serde",
  "serde_json",
  "shared-types",
@@ -1184,6 +1185,7 @@ name = "rinha_db"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "axum",
  "crossbeam-channel",
  "serde",
  "serde_json",

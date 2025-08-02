@@ -14,21 +14,7 @@ use sled;
 use tokio::{io::BufReader, net::UnixStream};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Message {
-    Read {
-        from: String,
-        to: String,
-    },
-    Write {
-        key: String,
-        value: f64,
-        tree: SledTree,
-    },
-    Purge,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum SledTree {
     Fallback,
     Default,
@@ -86,6 +72,19 @@ pub struct PaymentDTO {
     #[serde(rename = "correlationId")]
     pub correlation_id: Uuid,
     pub amount: f64,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct DBWrite {
+    pub key: String,
+    pub value: f64,
+    pub tree: SledTree,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct DBRead {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Clone)]
