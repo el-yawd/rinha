@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 shared-types = { workspace = true }
 uuid = { workspace = true }
+reqwest = { workspace = true }
 axum = "0.8.4"
 
 [profile.release]

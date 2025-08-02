@@ -1,3 +1,4 @@
+use reqwest::{Client, Request};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -13,7 +14,7 @@ use anyhow;
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -26,20 +27,29 @@ use tokio::{
 
 #[derive(Clone)]
 struct AppState {
-    db_pool: Arc<UnixConnectionPool>,
+    db_client: Client,
     api_pool: [Arc<UnixConnectionPool>; 2],
     balancer: Arc<AtomicU64>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "application/json".parse()?);
+    // TODO: Tweak Client config
+    let db_client = Client::builder()
+        .no_gzip()
+        .no_zstd()
+        .default_headers(headers.clone())
+        .build()?;
+
     // HTTP router
     let app = Router::new()
         .route("/payments-summary", get(get_payments_summary))
         .route("/payments", post(exec_payment))
         .route("/purge-payments", post(purge_payments))
         .with_state(AppState {
-            db_pool: Arc::new(UnixConnectionPool::new(Path::new("/tmp/rinha.sock"), 10).await?),
+            db_client,
             api_pool: [
                 Arc::new(UnixConnectionPool::new(Path::new("/tmp/api-1.sock"), 200).await?),
                 Arc::new(UnixConnectionPool::new(Path::new("/tmp/api-2.sock"), 200).await?),
@@ -66,33 +76,22 @@ async fn get_payments_summary(
         .cloned()
         .unwrap_or_else(|| "9999-12-31T23:59:59Z".to_string());
 
-    let message = shared_types::Message::Read { from, to };
+    let res = state
+        .db_client
+        .get(format!(
+            "http://rinha-db:8888/summary?from={}&to={}",
+            from, to
+        ))
+        .send()
+        .await;
 
-    let mut stream = state.db_pool.acquire().await.unwrap();
-
-    let serialized = serde_json::to_string(&message).expect("failed to serialize message");
-
-    stream
-        .write_all(serialized.as_bytes())
-        .await
-        .expect("failed to write to RinhaDB");
-    stream
-        .write_all(b"\n")
-        .await
-        .expect("failed to write newline");
-
-    stream.flush().await.expect("failed to flush");
-
-    let mut reader = BufReader::new(stream.take().unwrap());
-    let mut response_line = String::new();
-    reader
-        .read_line(&mut response_line)
-        .await
-        .expect("failed to read response");
-
-    let summary = serde_json::from_str::<GlobalSummary>(response_line.as_str()).unwrap();
-
-    (StatusCode::OK, Json(summary))
+    match res {
+        Ok(res) => {
+            let summary = res.json::<GlobalSummary>().await.unwrap();
+            (StatusCode::OK, Json(summary))
+        }
+        Err(_) => todo!(),
+    }
 }
 
 async fn exec_payment(
@@ -121,24 +120,12 @@ async fn exec_payment(
     StatusCode::OK
 }
 
-async fn purge_payments() -> impl IntoResponse {
-    let mut stream = UnixStream::connect("/tmp/rinha.sock")
-        .await
-        .expect("failed to connect to RinhaDB");
-
-    let serialized =
-        serde_json::to_string(&shared_types::Message::Purge).expect("failed to serialize message");
-
-    stream
-        .write_all(serialized.as_bytes())
-        .await
-        .expect("failed to write to RinhaDB");
-    stream
-        .write_all(b"\n")
-        .await
-        .expect("failed to write newline");
-
-    stream.flush().await.expect("failed to flush");
+async fn purge_payments(State(state): State<AppState>) -> impl IntoResponse {
+    let _ = state
+        .db_client
+        .delete("http://rinha-db:8888/purge")
+        .send()
+        .await;
 
     StatusCode::OK
 }

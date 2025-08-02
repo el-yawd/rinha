@@ -1,205 +1,106 @@
-use shared_types::{GlobalSummary, Message, SledTree, Summary};
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{delete, get};
+use axum::{Json, Router, routing::post};
+use serde_json::json;
+use shared_types::{DBWrite, GlobalSummary, SledTree, Summary};
 use sled::{self, Db, Tree};
-use std::env;
-use std::path::Path;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
-use tokio::task;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time;
 
-// Commands that will be processed sequentially
-#[derive(Debug)]
-enum Command {
-    Read {
-        from: String,
-        to: String,
-        response_tx: mpsc::UnboundedSender<String>,
-    },
-    Write {
-        key: String,
-        value: f64,
-        tree: SledTree,
-    },
-    Purge,
-}
-
-async fn database_worker(
-    mut command_rx: mpsc::UnboundedReceiver<Command>,
+#[derive(Clone)]
+struct AppState {
+    db: Db,
     default_tree: Tree,
     fallback_tree: Tree,
-    db: Db,
-) {
-    while let Some(command) = command_rx.recv().await {
-        match command {
-            Command::Read {
-                from,
-                to,
-                response_tx,
-            } => {
-                let result = (|| -> anyhow::Result<String> {
-                    let default =
-                        Summary::from_iter(default_tree.range(from.as_str()..=to.as_str()));
-                    let fallback =
-                        Summary::from_iter(fallback_tree.range(from.as_str()..=to.as_str()));
-                    let global_summary = GlobalSummary { default, fallback };
-                    serde_json::to_string(&global_summary).map_err(|e| e.into())
-                })();
-
-                match result {
-                    Ok(response) => {
-                        let _ = response_tx.send(response);
-                    }
-                    Err(e) => {
-                        eprintln!("Database error during read: {}", e);
-                    }
-                }
-            }
-            Command::Write { key, value, tree } => {
-                let result = (|| -> anyhow::Result<()> {
-                    let bytes = value.to_be_bytes();
-                    match tree {
-                        SledTree::Fallback => {
-                            fallback_tree.insert(key.as_bytes(), &bytes)?;
-                        }
-                        SledTree::Default => {
-                            default_tree.insert(key.as_bytes(), &bytes)?;
-                        }
-                    }
-                    Ok(())
-                })();
-
-                if let Err(e) = result {
-                    eprintln!("Database error during write: {}", e);
-                }
-            }
-            Command::Purge => {
-                let result = (|| -> anyhow::Result<()> {
-                    db.clear()?;
-                    Ok(())
-                })();
-
-                if let Err(e) = result {
-                    eprintln!("Database error during purge: {}", e);
-                }
-            }
-        }
-    }
-}
-
-async fn handle_client(
-    stream: UnixStream,
-    command_tx: mpsc::UnboundedSender<Command>,
-) -> anyhow::Result<()> {
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader).lines();
-
-    // Create a response channel for this client's reads
-    let (response_tx, mut response_rx) = mpsc::unbounded_channel::<String>();
-
-    // Spawn a task to handle responses for this client
-    let writer_task = {
-        task::spawn(async move {
-            while let Some(response) = response_rx.recv().await {
-                if writer.write_all(response.as_bytes()).await.is_err() {
-                    break;
-                }
-                if writer.write_all(b"\n").await.is_err() {
-                    break;
-                }
-                if writer.flush().await.is_err() {
-                    break;
-                }
-            }
-        })
-    };
-
-    while let Some(line) = reader.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        match serde_json::from_str::<Message>(&line) {
-            Ok(message) => match message {
-                Message::Read { from, to } => {
-                    if command_tx
-                        .send(Command::Read {
-                            from,
-                            to,
-                            response_tx: response_tx.clone(),
-                        })
-                        .is_err()
-                    {
-                        eprintln!("Database worker has shut down");
-                        break;
-                    }
-                }
-                Message::Write { key, value, tree } => {
-                    if command_tx
-                        .send(Command::Write { key, value, tree })
-                        .is_err()
-                    {
-                        eprintln!("Database worker has shut down");
-                        break;
-                    }
-                }
-                Message::Purge => {
-                    if command_tx.send(Command::Purge).is_err() {
-                        eprintln!("Database worker has shut down");
-                        break;
-                    }
-                }
-            },
-            Err(e) => {
-                eprintln!("Failed to parse message: {}", e);
-            }
-        }
-    }
-
-    // Clean up the writer task
-    writer_task.abort();
-    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let socket_path = env::var("RINHADB_SOCK").unwrap_or("/tmp/rinha.sock".to_string());
-    if Path::new(socket_path.as_str()).exists() {
-        std::fs::remove_file(socket_path.clone())?;
-    }
-
-    let database_url: String = "app_db".to_string();
-    let db = sled::open(database_url)?;
+    let db = sled::open("app_db")?;
     let default_tree = db.open_tree("default")?;
     let fallback_tree = db.open_tree("fallback")?;
 
-    // Create a channel for database commands
-    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let app_state = AppState {
+        db: db.clone(),
+        default_tree: default_tree.clone(),
+        fallback_tree: fallback_tree.clone(),
+    };
 
-    // Spawn the database worker that will process all operations sequentially
-    let db_clone = db.clone();
-    let default_tree_clone = default_tree.clone();
-    let fallback_tree_clone = fallback_tree.clone();
-    task::spawn(async move {
-        database_worker(
-            command_rx,
-            default_tree_clone,
-            fallback_tree_clone,
-            db_clone,
-        )
-        .await;
+    // Start the periodic flush task
+    let flush_state = app_state.clone();
+    tokio::spawn(async move {
+        periodic_flush(flush_state).await;
     });
 
-    let listener = UnixListener::bind(socket_path.as_str())?;
-    println!("RinhaDB listening on {}", socket_path);
+    let app = Router::new()
+        .route("/payment", post(process_payment))
+        .route("/summary", get(get_payments_summary))
+        .route("/purge", delete(purge_payments))
+        .with_state(app_state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8888").await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn periodic_flush(state: AppState) {
+    let mut interval = time::interval(Duration::from_millis(100));
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        let command_tx = command_tx.clone();
+        interval.tick().await;
 
-        task::spawn(async move {
-            if let Err(e) = handle_client(stream, command_tx).await {
-                eprintln!("Error handling client: {}", e);
-            }
-        });
+        // Flush both trees
+        if let Err(e) = state.default_tree.flush() {
+            eprintln!("Error flushing default tree: {}", e);
+        }
+
+        if let Err(e) = state.fallback_tree.flush() {
+            eprintln!("Error flushing fallback tree: {}", e);
+        }
     }
+}
+
+async fn purge_payments(State(state): State<AppState>) -> impl IntoResponse {
+    state.db.clear().unwrap();
+    StatusCode::OK
+}
+
+async fn get_payments_summary(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let from = params.get("from").unwrap();
+    let to = params.get("to").unwrap();
+    let default = Summary::from_iter(state.default_tree.range(from.as_str()..=to.as_str()));
+    let fallback = Summary::from_iter(state.fallback_tree.range(from.as_str()..=to.as_str()));
+    let global_summary = GlobalSummary { default, fallback };
+    Json(global_summary)
+}
+
+async fn process_payment(
+    State(state): State<AppState>,
+    Json(payload): Json<DBWrite>,
+) -> impl IntoResponse {
+    let bytes = payload.value.to_be_bytes();
+
+    match payload.tree {
+        SledTree::Fallback => {
+            if let Err(e) = state.fallback_tree.insert(payload.key.as_bytes(), &bytes) {
+                eprintln!("Error inserting into fallback tree: {}", e);
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
+        }
+        SledTree::Default => {
+            if let Err(e) = state.default_tree.insert(payload.key.as_bytes(), &bytes) {
+                eprintln!("Error inserting into default tree: {}", e);
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
+        }
+    };
+
+    StatusCode::OK
 }

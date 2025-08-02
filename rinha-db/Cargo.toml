@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 sled = { workspace = true }
 shared-types = { workspace = true }
+axum = { workspace = true }
 crossbeam-channel = "0.5.15"
 
 [profile.release]
